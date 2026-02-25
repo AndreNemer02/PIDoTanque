@@ -1,0 +1,157 @@
+#define F_CPU 16000000UL
+#include <avr/io.h>
+#include <util/delay.h>
+#include <stdio.h>
+
+#define LCD_ADDR 0x27
+
+void I2C_init() { TWSR = 0x00; TWBR = 72; }
+
+void I2C_start() {
+    TWCR = (1<<TWINT)|(1<<TWSTA)|(1<<TWEN);
+    while (!(TWCR & (1<<TWINT)));
+}
+
+void I2C_write(uint8_t data) {
+    TWDR = data;
+    TWCR = (1<<TWINT)|(1<<TWEN);
+    while (!(TWCR & (1<<TWINT)));
+}
+
+void I2C_stop() {
+    TWCR = (1<<TWINT)|(1<<TWEN)|(1<<TWSTO);
+    _delay_us(50);
+}
+
+void PCF_write(uint8_t data) {
+    I2C_start();
+    I2C_write(LCD_ADDR << 1);
+    I2C_write(data);
+    I2C_stop();
+}
+
+void lcd_nibble(uint8_t nibble, uint8_t rs) {
+    uint8_t data = (nibble << 4) | (1<<3);
+    if (rs) data |= (1<<0);
+    PCF_write(data | (1<<2));
+    _delay_us(1);
+    PCF_write(data & ~(1<<2));
+    _delay_us(50);
+}
+
+void lcd_cmd(uint8_t cmd) {
+    lcd_nibble(cmd >> 4, 0);
+    lcd_nibble(cmd & 0x0F, 0);
+    _delay_ms(2);
+}
+
+void lcd_char(char c) {
+    lcd_nibble((c >> 4) & 0x0F, 1);
+    lcd_nibble(c & 0x0F, 1);
+    _delay_us(50);
+}
+
+void lcd_print(const char* s) { while (*s) lcd_char(*s++); }
+
+void lcd_cursor(uint8_t row, uint8_t col) {
+    lcd_cmd(0x80 | ((row ? 0x40 : 0x00) + col));
+}
+
+void lcd_init() {
+    _delay_ms(50);
+    lcd_nibble(0x03, 0); _delay_ms(5);
+    lcd_nibble(0x03, 0); _delay_ms(1);
+    lcd_nibble(0x03, 0); _delay_ms(1);
+    lcd_nibble(0x02, 0); _delay_ms(1);
+    lcd_cmd(0x28);
+    lcd_cmd(0x0C);
+    lcd_cmd(0x06);
+    lcd_cmd(0x01);
+}
+
+void encoder_init() {
+    DDRD  &= ~((1<<PD2)|(1<<PD3)|(1<<PD4));
+    PORTD |=  ((1<<PD2)|(1<<PD3)|(1<<PD4));
+}
+
+volatile float Kp = 1.0, Ki = 0.5, Kd = 0.1;
+volatile float erro = 1.25;
+uint8_t param_sel = 0;
+
+void ftoa(float val, char* buf) {
+    int inteiro = (int)val;
+    int decimal = (int)((val - inteiro) * 10);
+    if (decimal < 0) decimal = -decimal;
+    sprintf(buf, "%d.%d", inteiro, decimal);
+}
+
+void atualiza_lcd() {
+    char buf[8], linha[17];
+
+    lcd_cursor(0, 0);
+    ftoa(erro, buf);
+    lcd_print("Erro:");
+    lcd_print(buf);
+    lcd_print("          ");
+
+    lcd_cursor(1, 0);
+    if (param_sel == 0) {
+        ftoa(Kp, buf);
+        sprintf(linha, "* Kp: %s        ", buf);
+    } else if (param_sel == 1) {
+        ftoa(Ki, buf);
+        sprintf(linha, "* Ki: %s        ", buf);
+    } else {
+        ftoa(Kd, buf);
+        sprintf(linha, "* Kd: %s        ", buf);
+    }
+
+    linha[16] = '\0';
+    lcd_print(linha);
+}
+
+int main(void) {
+    I2C_init();
+    lcd_init();
+    encoder_init();
+
+    uint8_t last_clk = (PIND & (1<<PD2));
+    uint8_t last_sw  = (PIND & (1<<PD4));
+
+    atualiza_lcd();
+
+    while (1) {
+        uint8_t clk = (PIND & (1<<PD2));
+        uint8_t dt  = (PIND & (1<<PD3));
+        uint8_t sw  = (PIND & (1<<PD4));
+
+        // Encoder - borda de descida
+        if (clk != last_clk && clk == 0) {
+            _delay_ms(5);
+
+            float passo = 0.1;
+            float sinal = (dt == 0) ? -1.0 : 1.0; // direita diminui, esquerda aumenta
+
+            if      (param_sel == 0) Kp += sinal * passo;
+            else if (param_sel == 1) Ki += sinal * passo;
+            else                     Kd += sinal * passo;
+
+            if (Kp < 0) Kp = 0;
+            if (Ki < 0) Ki = 0;
+            if (Kd < 0) Kd = 0;
+
+            atualiza_lcd();
+        }
+        last_clk = clk;
+
+        // Botão - troca parâmetro
+        if (!sw && last_sw) {
+            _delay_ms(20);
+            param_sel = (param_sel + 1) % 3;
+            atualiza_lcd();
+        }
+        last_sw = sw;
+
+        _delay_ms(1);
+    }
+}
