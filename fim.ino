@@ -197,9 +197,8 @@ int main(void) {
 } 
 --------------------------------------------------------------------------------------------------------------------------------------------------------
 
-
-  /* * PROJETO TANQUE UFES - VERSÃO PURISTA (SEM HEADERS)
- * Frequência de Clock: 16MHz
+/* * PROJETO TANQUE UFES - VERSÃO PURISTA ABSOLUTA 
+ * Sem #include <...>
  */
 
 typedef unsigned char  uint8_t;
@@ -207,29 +206,18 @@ typedef unsigned int   uint16_t;
 typedef unsigned long  uint32_t;
 typedef signed int     int16_t;
 
-/* --- DEFINIÇÃO MANUAL DE REGISTRADORES (MEMÓRIA I/O) --- */
-// PORTB (Digital 8 a 13)
+/* --- DEFINIÇÃO MANUAL DE ENDEREÇOS DE REGISTRADORES --- */
 #define DDRB   (*(volatile uint8_t *)(0x24))
 #define PORTB  (*(volatile uint8_t *)(0x25))
 #define PINB   (*(volatile uint8_t *)(0x23))
 
-// PORTC (Analógicos / I2C)
 #define DDRC   (*(volatile uint8_t *)(0x27))
 #define PORTC  (*(volatile uint8_t *)(0x28))
 #define PINC   (*(volatile uint8_t *)(0x26))
 
-// PORTD (Digital 0 a 7)
 #define DDRD   (*(volatile uint8_t *)(0x2A))
 #define PORTD  (*(volatile uint8_t *)(0x2B))
 #define PIND   (*(volatile uint8_t *)(0x29))
-
-// USART (Serial)
-#define UBRR0H (*(volatile uint8_t *)(0xC5))
-#define UBRR0L (*(volatile uint8_t *)(0xC4))
-#define UCSR0A (*(volatile uint8_t *)(0xC0))
-#define UCSR0B (*(volatile uint8_t *)(0xC1))
-#define UCSR0C (*(volatile uint8_t *)(0xC2))
-#define UDR0   (*(volatile uint8_t *)(0xC6))
 
 // TWI (I2C)
 #define TWBR   (*(volatile uint8_t *)(0xB8))
@@ -237,7 +225,15 @@ typedef signed int     int16_t;
 #define TWDR   (*(volatile uint8_t *)(0xBB))
 #define TWCR   (*(volatile uint8_t *)(0xBC))
 
-// Timer 1 (16 bits)
+// USART
+#define UBRR0H (*(volatile uint8_t *)(0xC5))
+#define UBRR0L (*(volatile uint8_t *)(0xC4))
+#define UCSR0A (*(volatile uint8_t *)(0xC0))
+#define UCSR0B (*(volatile uint8_t *)(0xC1))
+#define UCSR0C (*(volatile uint8_t *)(0xC2))
+#define UDR0   (*(volatile uint8_t *)(0xC6))
+
+// Timer 1 (16-bit)
 #define TCCR1A (*(volatile uint8_t *)(0x80))
 #define TCCR1B (*(volatile uint8_t *)(0x81))
 #define ICR1   (*(volatile uint16_t *)(0x86))
@@ -245,15 +241,14 @@ typedef signed int     int16_t;
 #define OCR1B  (*(volatile uint16_t *)(0x8A))
 #define TIMSK1 (*(volatile uint8_t *)(0x6E))
 
-// Interrupções Externas
+// Interrupções e Status
 #define EICRA  (*(volatile uint8_t *)(0x69))
 #define EIMSK  (*(volatile uint8_t *)(0x3D))
 #define SREG   (*(volatile uint8_t *)(0x5F))
 
-/* --- FUNÇÕES DE ATRASO MANUAIS (16MHz) --- */
+/* --- FUNÇÕES DE ATRASO MANUAIS (CALIBRADAS PARA 16MHz) --- */
 void delay_us(uint16_t us) {
     while (us--) {
-        // Aproximadamente 16 ciclos por us
         __asm__ volatile ("nop\n\tnop\n\tnop\n\tnop\n\t"); 
     }
 }
@@ -264,7 +259,7 @@ void delay_ms(uint16_t ms) {
     }
 }
 
-/* --- DRIVER I2C E LCD --- */
+/* --- DRIVER I2C E LCD (SUA INTERFACE) --- */
 void i2c_start() {
     TWCR = (1<<7)|(1<<5)|(1<<2); // TWINT, TWSTA, TWEN
     while (!(TWCR & (1<<7)));
@@ -280,7 +275,7 @@ void pcf_write(uint8_t data) {
     i2c_start();
     i2c_write(0x27 << 1); // Endereço LCD
     i2c_write(data);
-    TWCR = (1<<7)|(1<<4)|(1<<2); // TWSTO
+    TWCR = (1<<7)|(1<<4)|(1<<2); // TWSTO (STOP)
     delay_us(50);
 }
 
@@ -304,29 +299,47 @@ void lcd_char(char c) {
     lcd_nibble(c & 0x0F, 1);
 }
 
-/* --- CONVERSOR FLOAT PARA STRING (SIMPLIFICADO) --- */
-void float_to_str(float val, char* buf) {
-    int int_part = (int)val;
-    int dec_part = (int)((val - int_part) * 10);
-    if (dec_part < 0) dec_part = -dec_part;
-    
-    // Converte parte inteira (simplificado para 2 dígitos)
-    int i = 0;
-    if (int_part >= 10) buf[i++] = (int_part / 10) + '0';
-    buf[i++] = (int_part % 10) + '0';
-    buf[i++] = '.';
-    buf[i++] = dec_part + '0';
-    buf[i] = '\0';
+void lcd_print(const char* s) {
+    while (*s) lcd_char(*s++);
 }
 
-/* --- VARIÁVEIS DE CONTROLE --- */
+/* --- CONVERSÃO DE DADOS (SEM STDIO.H) --- */
+void ftoa_manual(float val, char* buf) {
+    if (val < 0) { *buf++ = '-'; val = -val; }
+    int int_part = (int)val;
+    int dec_part = (int)((val - int_part) * 10);
+    
+    // Inteiro (max 2 dígitos para interface)
+    if (int_part >= 10) *buf++ = (int_part / 10) + '0';
+    *buf++ = (int_part % 10) + '0';
+    *buf++ = '.';
+    *buf++ = dec_part + '0';
+    *buf = '\0';
+}
+
+float atof_manual(const char* s) {
+    float res = 0.0, fact = 1.0;
+    if (*s == '-') { s++; fact = -1.0; }
+    for (int point_seen = 0; *s; s++) {
+        if (*s == '.') { point_seen = 1; continue; }
+        int d = *s - '0';
+        if (d >= 0 && d <= 9) {
+            if (point_seen) fact /= 10.0f;
+            res = res * 10.0f + (float)d;
+        }
+    }
+    return res * fact;
+}
+
+/* --- VARIÁVEIS GLOBAIS --- */
 volatile float Kp = 1.0, Ki = 0.1, Kd = 0.05;
-volatile float erro_global = 0;
+volatile float erro_val = 0;
 volatile uint32_t pulsos = 0;
 volatile uint8_t flag_pid = 0;
+uint8_t param_sel = 0;
 
-/* --- INTERRUPÇÕES (ENDEREÇOS VETORIAIS DO ATmega328P) --- */
-void __vector_2 (void) __attribute__ ((signal, used, externally_visible)); // INT1
+/* --- INTERRUPÇÕES MANUAIS (__vector_n) --- */
+void __vector_2 (void) __attribute__ ((signal, used, externally_visible)); // INT1 (D3)
 void __vector_2 (void) { pulsos++; }
 
 void __vector_11 (void) __attribute__ ((signal, used, externally_visible)); // TIMER1 COMPA
@@ -335,74 +348,110 @@ void __vector_11 (void) {
     if (++cnt >= 50) { flag_pid = 1; cnt = 0; }
 }
 
+void __vector_18 (void) __attribute__ ((signal, used, externally_visible)); // USART RX
+void __vector_18 (void) {
+    static char rx_b[16]; static uint8_t rx_i = 0;
+    char c = UDR0;
+    if (c == '\n') {
+        rx_b[rx_i] = '\0'; rx_i = 0;
+        if (rx_b[0] == 'K' && rx_b[1] == 'P') Kp = atof_manual(&rx_b[3]);
+        else if (rx_b[0] == 'K' && rx_b[1] == 'I') Ki = atof_manual(&rx_b[3]);
+        else if (rx_b[0] == 'K' && rx_b[1] == 'D') Kd = atof_manual(&rx_b[3]);
+    } else if (rx_i < 15) rx_b[rx_i++] = c;
+}
+
+/* --- FUNÇÃO DE INTERFACE ORIGINAL --- */
+void atualiza_lcd() {
+    char b[8];
+    lcd_cmd(0x80); lcd_print("Erro:");
+    ftoa_manual(erro_val, b); lcd_print(b); lcd_print("      ");
+    
+    lcd_cmd(0xC0);
+    if (param_sel == 0) { lcd_print("* Kp: "); ftoa_manual(Kp, b); }
+    else if (param_sel == 1) { lcd_print("* Ki: "); ftoa_manual(Ki, b); }
+    else { lcd_print("* Kd: "); ftoa_manual(Kd, b); }
+    lcd_print(b); lcd_print("      ");
+}
+
 /* --- MAIN --- */
 int main(void) {
-    // Configurações de I/O
-    DDRD = (1<<7); // PD7 Saída (Trig), PD6 Entrada (Echo), PD3 Entrada (Vazão)
-    DDRB = (1<<5) | (1<<2); // PB5 Saída (Bomba), PB2 Saída (Servo)
-    PORTB = (1<<5); // Bomba PNP Desligada
+    // Configurações DDR conforme Tabela
+    DDRD = (1<<7); // PD7 Saída (Trig), PD6/PD3 Entradas
+    DDRB = (1<<5) | (1<<2); // PB5 Saída (Bomba), PB2 Saída (Servo), PB3/PB4 Entradas
+    PORTB = (1<<5); // Bomba PNP OFF
     PORTD = (1<<4); // Pull-up Encoder SW
 
-    // I2C Init
-    TWSR = 0x00; TWBR = 72; 
+    // Inicializações
+    TWSR = 0x00; TWBR = 72; // I2C 100kHz
+    UBRR0H = 0; UBRR0L = 103; // 9600 baud
+    UCSR0B = (1<<4) | (1<<3) | (1<<7); // RXEN, TXEN, RXCIE
     
-    // LCD Init Manual
+    // LCD Init
     delay_ms(50);
     lcd_nibble(0x03, 0); delay_ms(5);
     lcd_nibble(0x03, 0); delay_ms(1);
     lcd_nibble(0x03, 0); lcd_nibble(0x02, 0);
     lcd_cmd(0x28); lcd_cmd(0x0C); lcd_cmd(0x01);
 
-    // USART Init (9600 baud)
-    UBRR0H = 0; UBRR0L = 103;
-    UCSR0B = (1<<3) | (1<<4); // TXEN, RXEN
-
-    // Timer 1 (PWM Servo + Tick 100ms)
+    // Timer1 (PWM + Tick)
     TCCR1A = (1<<5) | (1<<1); // COM1B1, WGM11
-    TCCR1B = (1<<4) | (1<<3) | (1<<1); // WGM13, WGM12, CS11 (Prescaler 8)
+    TCCR1B = (1<<4) | (1<<3) | (1<<1); // WGM13, WGM12, CS11
     ICR1 = 39999; OCR1B = 3000;
     TIMSK1 = (1<<1); OCR1A = 3999;
 
-    // Interrupção Externa (INT1 - Borda de Subida)
-    EICRA = (1<<3) | (1<<2); EIMSK = (1<<1);
-    
-    // Habilita Interrupções Globais
-    __asm__ volatile ("sei" ::);
+    EICRA = (1<<3); EIMSK = (1<<1); // INT1 Borda Descida
+    __asm__ volatile ("sei" ::); // Enable Global Interrupts
 
-    char str_vazao[8], str_nivel[8], tele[80];
+    uint8_t l_clk = (PINB & (1<<3));
+    uint8_t l_sw  = (PIND & (1<<4));
+
+    atualiza_lcd();
 
     while(1) {
+        // Polling Encoder (D11/D12/D4)
+        uint8_t clk = (PINB & (1<<3));
+        if (clk != l_clk && clk == 0) {
+            float s = (PINB & (1<<4)) ? 1.0 : -1.0;
+            if (param_sel == 0) Kp += s*0.1;
+            else if (param_sel == 1) Ki += s*0.1;
+            else Kd += s*0.1;
+            atualiza_lcd();
+        }
+        l_clk = clk;
+
+        uint8_t sw = (PIND & (1<<4));
+        if (!sw && l_sw) { param_sel = (param_sel + 1) % 3; atualiza_lcd(); delay_ms(200); }
+        l_sw = sw;
+
         if (flag_pid) {
-            // 1. Nível (Ultrassônico)
+            // Nível
             PORTD |= (1<<7); delay_us(10); PORTD &= ~(1<<7);
-            uint32_t t = 0;
-            while(!(PIND & (1<<6)) && t < 30000) t++;
-            t = 0;
-            while((PIND & (1<<6)) && t < 30000) { t++; delay_us(1); }
+            uint32_t t = 0; while(!(PIND & (1<<6)) && t < 30000) t++;
+            t = 0; while((PIND & (1<<6)) && t < 30000) { t++; delay_us(1); }
             float nivel = (t * 0.034) / 2;
 
-            // 2. Bomba PNP
-            if (nivel > 15.0) PORTB &= ~(1<<5); // LIGA
-            else if (nivel < 5.0) PORTB |= (1<<5); // DESLIGA
+            // Bomba PNP
+            if (nivel > 15.0) PORTB &= ~(1<<5); else if (nivel < 5.0) PORTB |= (1<<5);
 
-            // 3. Vazão e PID
+            // PID Simples
             float vazao = (pulsos * 60.0) / 7.5; pulsos = 0;
-            erro_global = 30.0 - vazao; // Setpoint 30
-            float u = (Kp * erro_global); // Proporcional simples para exemplo
+            erro_val = 30.0 - vazao;
+            
+            float u = (Kp * erro_val); // Exemplo Proporcional
+            int16_t sv = 3000 + (int16_t)u;
+            if (sv < 2000) sv = 2000; if (sv > 4000) sv = 4000;
+            OCR1B = sv;
 
-            int16_t servo_val = 3000 + (int16_t)u;
-            if (servo_val < 2000) servo_val = 2000;
-            if (servo_val > 4000) servo_val = 4000;
-            OCR1B = servo_val;
+            atualiza_lcd();
 
-            // 4. LCD Manual
-            lcd_cmd(0x80);
-            lcd_char('E'); lcd_char(':');
-            float_to_str(erro_global, str_vazao);
-            for(int j=0; str_vazao[j]; j++) lcd_char(str_vazao[j]);
+            // Telemetria Serial (Manual sem sprintf)
+            char tmp[10];
+            ftoa_manual(vazao, tmp); for(int j=0; tmp[j]; j++){ while(!(UCSR0A & (1<<5))); UDR0 = tmp[j]; }
+            while(!(UCSR0A & (1<<5))); UDR0 = ',';
+            ftoa_manual(nivel, tmp); for(int j=0; tmp[j]; j++){ while(!(UCSR0A & (1<<5))); UDR0 = tmp[j]; }
+            while(!(UCSR0A & (1<<5))); UDR0 = '\n';
 
             flag_pid = 0;
         }
     }
-    return 0;
 }
