@@ -19,8 +19,8 @@
 void UART_init() {
     MY_UBRR0H = 0;
     MY_UBRR0L = 103; // 9600 baud @ 16MHz
-    MY_UCSR0B = (1 << 3); // Liga Transmissão (TX)
-    MY_UCSR0C = (3 << 1); // Configuração 8-bit
+    MY_UCSR0B = (1 << 3); 
+    MY_UCSR0C = (3 << 1); 
 }
 
 void UART_send_msg(const char* s) {
@@ -47,8 +47,11 @@ int main(void) {
     MY_DDRD &= ~(1 << 6); // Echo (D6) como Entrada
     MY_DDRB |= (1 << 5);  // Bomba (D13) como Saída
 
-    // Inicia com Bomba DESLIGADA (5V no pino para lógica PNP)
-    MY_PORTB |= (1 << 5);
+    MY_PORTB |= (1 << 5); // Inicia DESLIGADA (Lógica PNP)
+
+    // Variáveis de Estabilização
+    unsigned char count_on = 0;
+    unsigned char count_off = 0;
 
     while(1) {
         // 1. Pulso de Trigger (10us)
@@ -64,30 +67,48 @@ int main(void) {
         unsigned int ticks = MY_TCNT1;
         MY_TCCR1B = 0;
 
-        // 3. Controle com a Nova Histerese (700 / 850)
+        // 3. Lógica com Contador de Confirmação (5 vezes)
         if (ticks > 850) { 
-            // Nível Baixo (distância grande): LIGAR BOMBA
-            MY_PORTB &= ~(1 << 5); // 0V na base liga o transistor PNP
-            UART_send_msg("LIGADA  | Ticks: ");
+            count_on++;
+            count_off = 0; // Reseta o contador oposto
+            
+            if (count_on >= 5) {
+                MY_PORTB &= ~(1 << 5); // LIGA (0V na base PNP)
+                UART_send_msg("LIGADA  | ");
+                count_on = 0;
+            } else {
+                UART_send_msg("CONFIRM.| ");
+            }
         } 
         else if (ticks < 700) {
-            // Nível Alto (distância curta): DESLIGAR BOMBA
-            MY_PORTB |= (1 << 5);  // 5V na base corta o transistor PNP
-            UART_send_msg("DESLIG. | Ticks: ");
-        } else {
-            UART_send_msg("MANTER  | Ticks: ");
+            count_off++;
+            count_on = 0; // Reseta o contador oposto
+            
+            if (count_off >= 5) {
+                MY_PORTB |= (1 << 5);  // DESLIGA (5V na base PNP)
+                UART_send_msg("DESLIG. | ");
+                count_off = 0;
+            } else {
+                UART_send_msg("CONFIRM.| ");
+            }
+        } 
+        else {
+            // Zona morta (Histerese): mantém o estado e reseta filtros
+            UART_send_msg("MANTER  | ");
+            count_on = 0;
+            count_off = 0;
         }
 
+        UART_send_msg("Ticks: ");
         UART_send_num(ticks);
         while (!(MY_UCSR0A & (1 << 5))); MY_UDR0 = '\r';
         while (!(MY_UCSR0A & (1 << 5))); MY_UDR0 = '\n';
 
-        // Delay de estabilização (~200ms)
+        // Delay de estabilização (~200ms) - Essencial para ondas na água
         for(unsigned long i = 0; i < 300000; i++) __asm__ __volatile__ ("nop");
     }
     return 0;
 }
 
-/* --- FUNÇÕES PARA SATISFAZER O LINKER DO ARDUINO --- */
 void setup() {}
 void loop() {}
