@@ -27,7 +27,7 @@ volatile uint8_t flag_pid = 0;
 volatile uint32_t pulsos_vazao = 0;
 float erro_anterior = 0, integral = 0;
 float vazao_real = 0, nivel_real = 0;
-int16_t setpoint_vazao = 30;
+int16_t setpoint_vazao = 30; // exemplo
 uint8_t param_sel = 0; 
 
 /* --- DRIVER I2C BARE METAL --- */
@@ -196,9 +196,13 @@ int main(void) {
     }
 } 
 --------------------------------------------------------------------------------------------------------------------------------------------------------
-
-/* * PROJETO TANQUE UFES - VERSÃO PURISTA ABSOLUTA 
- * Sem #include <...>
+/**
+ * @file main.c
+ * @brief Sistema de Controle de Tanque - Bare Metal Purista para ATmega328P.
+ * @details Este firmware gerencia um controlador PID de vazão, segurança de nível 
+ * via sensor ultrassônico, interface de usuário via LCD I2C e Encoder, 
+ * além de telemetria serial para gateway ESP32.
+ * NÃO utiliza headers padrão (<avr/io.h>, etc).
  */
 
 typedef unsigned char  uint8_t;
@@ -206,85 +210,120 @@ typedef unsigned int   uint16_t;
 typedef unsigned long  uint32_t;
 typedef signed int     int16_t;
 
-/* --- DEFINIÇÃO MANUAL DE ENDEREÇOS DE REGISTRADORES --- */
-#define DDRB   (*(volatile uint8_t *)(0x24))
-#define PORTB  (*(volatile uint8_t *)(0x25))
-#define PINB   (*(volatile uint8_t *)(0x23))
+/* --- MAPEAMENTO DE REGISTRADORES I/O (ENDEREÇOS FÍSICOS) --- */
 
-#define DDRC   (*(volatile uint8_t *)(0x27))
-#define PORTC  (*(volatile uint8_t *)(0x28))
-#define PINC   (*(volatile uint8_t *)(0x26))
+/** @name Registradores de Porta B (Digital 8-13) */
+///@{
+#define DDRB   (*(volatile uint8_t *)(0x24))  /**< Data Direction Register B */
+#define PORTB  (*(volatile uint8_t *)(0x25))  /**< Port B Data Register */
+#define PINB   (*(volatile uint8_t *)(0x23))  /**< Port B Input Pins Address */
+///@}
 
-#define DDRD   (*(volatile uint8_t *)(0x2A))
-#define PORTD  (*(volatile uint8_t *)(0x2B))
-#define PIND   (*(volatile uint8_t *)(0x29))
+/** @name Registradores de Porta D (Digital 0-7) */
+///@{
+#define DDRD   (*(volatile uint8_t *)(0x2A))  /**< Data Direction Register D */
+#define PORTD  (*(volatile uint8_t *)(0x2B))  /**< Port D Data Register */
+#define PIND   (*(volatile uint8_t *)(0x29))  /**< Port D Input Pins Address */
+///@}
 
-// TWI (I2C)
-#define TWBR   (*(volatile uint8_t *)(0xB8))
-#define TWSR   (*(volatile uint8_t *)(0xB9))
-#define TWDR   (*(volatile uint8_t *)(0xBB))
-#define TWCR   (*(volatile uint8_t *)(0xBC))
+/** @name Registradores TWI (I2C) */
+///@{
+#define TWBR   (*(volatile uint8_t *)(0xB8))  /**< TWI Bit Rate Register */
+#define TWSR   (*(volatile uint8_t *)(0xB9))  /**< TWI Status Register */
+#define TWDR   (*(volatile uint8_t *)(0xBB))  /**< TWI Data Register */
+#define TWCR   (*(volatile uint8_t *)(0xBC))  /**< TWI Control Register */
+///@}
 
-// USART
-#define UBRR0H (*(volatile uint8_t *)(0xC5))
-#define UBRR0L (*(volatile uint8_t *)(0xC4))
-#define UCSR0A (*(volatile uint8_t *)(0xC0))
-#define UCSR0B (*(volatile uint8_t *)(0xC1))
-#define UCSR0C (*(volatile uint8_t *)(0xC2))
-#define UDR0   (*(volatile uint8_t *)(0xC6))
+/** @name Registradores USART (Comunicação Serial) */
+///@{
+#define UBRR0H (*(volatile uint8_t *)(0xC5))  /**< USART Baud Rate Register High */
+#define UBRR0L (*(volatile uint8_t *)(0xC4))  /**< USART Baud Rate Register Low */
+#define UCSR0A (*(volatile uint8_t *)(0xC0))  /**< USART Control and Status A */
+#define UCSR0B (*(volatile uint8_t *)(0xC1))  /**< USART Control and Status B */
+#define UCSR0C (*(volatile uint8_t *)(0xC2))  /**< USART Control and Status C */
+#define UDR0   (*(volatile uint8_t *)(0xC6))  /**< USART I/O Data Register */
+///@}
 
-// Timer 1 (16-bit)
-#define TCCR1A (*(volatile uint8_t *)(0x80))
-#define TCCR1B (*(volatile uint8_t *)(0x81))
-#define ICR1   (*(volatile uint16_t *)(0x86))
-#define OCR1A  (*(volatile uint16_t *)(0x88))
-#define OCR1B  (*(volatile uint16_t *)(0x8A))
-#define TIMSK1 (*(volatile uint8_t *)(0x6E))
+/** @name Registradores Timer 1 (Controle 16-bit) */
+///@{
+#define TCCR1A (*(volatile uint8_t *)(0x80))  /**< Timer/Counter Control Register A */
+#define TCCR1B (*(volatile uint8_t *)(0x81))  /**< Timer/Counter Control Register B */
+#define ICR1   (*(volatile uint16_t *)(0x86)) /**< Input Capture Register (TOP PWM) */
+#define OCR1A  (*(volatile uint16_t *)(0x88)) /**< Output Compare Register A (Tick PID) */
+#define OCR1B  (*(volatile uint16_t *)(0x8A)) /**< Output Compare Register B (Servo PWM) */
+#define TIMSK1 (*(volatile uint8_t *)(0x6E))  /**< Timer Interrupt Mask Register */
+///@}
 
-// Interrupções e Status
-#define EICRA  (*(volatile uint8_t *)(0x69))
-#define EIMSK  (*(volatile uint8_t *)(0x3D))
-#define SREG   (*(volatile uint8_t *)(0x5F))
+/** @name Registradores de Sistema e Interrupções */
+///@{
+#define EICRA  (*(volatile uint8_t *)(0x69))  /**< External Interrupt Control Register A */
+#define EIMSK  (*(volatile uint8_t *)(0x3D))  /**< External Interrupt Mask Register */
+#define SREG   (*(volatile uint8_t *)(0x5F))  /**< Status Register (Global Interrupts) */
+///@}
 
-/* --- FUNÇÕES DE ATRASO MANUAIS (CALIBRADAS PARA 16MHz) --- */
+/* --- FUNÇÕES DE TEMPO E UTILITÁRIOS --- */
+
+/**
+ * @brief Gera atraso em microssegundos.
+ * @param us Valor do atraso (calibrado para 16MHz).
+ */
 void delay_us(uint16_t us) {
     while (us--) {
         __asm__ volatile ("nop\n\tnop\n\tnop\n\tnop\n\t"); 
     }
 }
 
+/**
+ * @brief Gera atraso em milissegundos.
+ * @param ms Valor do atraso.
+ */
 void delay_ms(uint16_t ms) {
-    while (ms--) {
-        delay_us(1000);
-    }
+    while (ms--) delay_us(1000);
 }
 
-/* --- DRIVER I2C E LCD (SUA INTERFACE) --- */
+/* --- DRIVER I2C E LCD (ABSTRAÇÃO TWI) --- */
+
+/**
+ * @brief Inicia sinal de START no barramento I2C.
+ */
 void i2c_start() {
     TWCR = (1<<7)|(1<<5)|(1<<2); // TWINT, TWSTA, TWEN
     while (!(TWCR & (1<<7)));
 }
 
+/**
+ * @brief Escreve um byte no barramento I2C.
+ * @param data Byte de dado ou endereço.
+ */
 void i2c_write(uint8_t data) {
     TWDR = data;
     TWCR = (1<<7)|(1<<2); // TWINT, TWEN
     while (!(TWCR & (1<<7)));
 }
 
+/**
+ * @brief Escreve no expansor PCF8574 do LCD.
+ * @param data Nibble de dado e bits de controle (EN, RS, BL).
+ */
 void pcf_write(uint8_t data) {
     i2c_start();
-    i2c_write(0x27 << 1); // Endereço LCD
+    i2c_write(0x27 << 1); // Endereço padrão 0x27
     i2c_write(data);
     TWCR = (1<<7)|(1<<4)|(1<<2); // TWSTO (STOP)
     delay_us(50);
 }
 
+/**
+ * @brief Envia um nibble (4 bits) para o LCD.
+ * @param nibble Os 4 bits superiores.
+ * @param rs Estado do bit Register Select (0 comando, 1 dado).
+ */
 void lcd_nibble(uint8_t nibble, uint8_t rs) {
-    uint8_t data = (nibble << 4) | (1<<3); // Backlight ON
+    uint8_t data = (nibble << 4) | (1<<3); // Bit 3 = Backlight ON
     if (rs) data |= (1<<0);
-    pcf_write(data | (1<<2)); // EN ON
+    pcf_write(data | (1<<2)); // Enable ON
     delay_us(1);
-    pcf_write(data & ~(1<<2)); // EN OFF
+    pcf_write(data & ~(1<<2)); // Enable OFF
     delay_us(50);
 }
 
@@ -303,13 +342,17 @@ void lcd_print(const char* s) {
     while (*s) lcd_char(*s++);
 }
 
-/* --- CONVERSÃO DE DADOS (SEM STDIO.H) --- */
+/* --- CONVERSÃO E PARSING --- */
+
+/**
+ * @brief Converte float para string (Formato X.X).
+ * @param val Valor float.
+ * @param buf Ponteiro para o buffer de saída.
+ */
 void ftoa_manual(float val, char* buf) {
     if (val < 0) { *buf++ = '-'; val = -val; }
     int int_part = (int)val;
     int dec_part = (int)((val - int_part) * 10);
-    
-    // Inteiro (max 2 dígitos para interface)
     if (int_part >= 10) *buf++ = (int_part / 10) + '0';
     *buf++ = (int_part % 10) + '0';
     *buf++ = '.';
@@ -317,6 +360,11 @@ void ftoa_manual(float val, char* buf) {
     *buf = '\0';
 }
 
+/**
+ * @brief Converte string para float.
+ * @param s String de entrada.
+ * @return Valor convertido.
+ */
 float atof_manual(const char* s) {
     float res = 0.0, fact = 1.0;
     if (*s == '-') { s++; fact = -1.0; }
@@ -331,24 +379,34 @@ float atof_manual(const char* s) {
     return res * fact;
 }
 
-/* --- VARIÁVEIS GLOBAIS --- */
+/* --- VARIÁVEIS GLOBAIS DE CONTROLE --- */
 volatile float Kp = 1.0, Ki = 0.1, Kd = 0.05;
-volatile float erro_val = 0;
+volatile float erro_val = 0, integral = 0, erro_ant = 0;
 volatile uint32_t pulsos = 0;
 volatile uint8_t flag_pid = 0;
 uint8_t param_sel = 0;
 
-/* --- INTERRUPÇÕES MANUAIS (__vector_n) --- */
-void __vector_2 (void) __attribute__ ((signal, used, externally_visible)); // INT1 (D3)
+/* --- VETORES DE INTERRUPÇÃO (DIRETO NO HARDWARE) --- */
+
+/**
+ * @brief ISR INT1 (Pino D3) - Contador de pulsos do sensor de vazão.
+ */
+void __vector_2 (void) __attribute__ ((signal, used, externally_visible));
 void __vector_2 (void) { pulsos++; }
 
-void __vector_11 (void) __attribute__ ((signal, used, externally_visible)); // TIMER1 COMPA
+/**
+ * @brief ISR TIMER1_COMPA - Base de tempo de 100ms para o PID.
+ */
+void __vector_11 (void) __attribute__ ((signal, used, externally_visible));
 void __vector_11 (void) {
     static uint8_t cnt = 0;
     if (++cnt >= 50) { flag_pid = 1; cnt = 0; }
 }
 
-void __vector_18 (void) __attribute__ ((signal, used, externally_visible)); // USART RX
+/**
+ * @brief ISR USART_RXC - Recebe novos parâmetros Kp, Ki, Kd do ESP32/Blynk.
+ */
+void __vector_18 (void) __attribute__ ((signal, used, externally_visible));
 void __vector_18 (void) {
     static char rx_b[16]; static uint8_t rx_i = 0;
     char c = UDR0;
@@ -360,7 +418,9 @@ void __vector_18 (void) {
     } else if (rx_i < 15) rx_b[rx_i++] = c;
 }
 
-/* --- FUNÇÃO DE INTERFACE ORIGINAL --- */
+/**
+ * @brief Atualiza os valores mostrados no LCD 16x2.
+ */
 void atualiza_lcd() {
     char b[8];
     lcd_cmd(0x80); lcd_print("Erro:");
@@ -373,34 +433,34 @@ void atualiza_lcd() {
     lcd_print(b); lcd_print("      ");
 }
 
-/* --- MAIN --- */
-int main(void) {
-    // Configurações DDR conforme Tabela
-    DDRD = (1<<7); // PD7 Saída (Trig), PD6/PD3 Entradas
-    DDRB = (1<<5) | (1<<2); // PB5 Saída (Bomba), PB2 Saída (Servo), PB3/PB4 Entradas
-    PORTB = (1<<5); // Bomba PNP OFF
-    PORTD = (1<<4); // Pull-up Encoder SW
+/* --- LOOP PRINCIPAL --- */
 
-    // Inicializações
-    TWSR = 0x00; TWBR = 72; // I2C 100kHz
-    UBRR0H = 0; UBRR0L = 103; // 9600 baud
-    UCSR0B = (1<<4) | (1<<3) | (1<<7); // RXEN, TXEN, RXCIE
+int main(void) {
+    /* Inicialização de Portas */
+    DDRD = (1<<7);          // PD7 Out (Trig), PD6/PD3 In (Echo/Vazão)
+    DDRB = (1<<5) | (1<<2); // PB5 Out (Bomba), PB2 Out (Servo), PB3/PB4 In (Encoder)
+    PORTB = (1<<5);         // Bomba PNP OFF (Ativa em 0)
+    PORTD = (1<<4);         // Pull-up Encoder SW
+
+    /* Inicialização de Periféricos */
+    TWSR = 0x00; TWBR = 72;             // I2C @ 100kHz
+    UBRR0H = 0; UBRR0L = 103;           // USART @ 9600 baud
+    UCSR0B = (1<<4) | (1<<3) | (1<<7);  // RXEN, TXEN, RXCIE
     
-    // LCD Init
     delay_ms(50);
     lcd_nibble(0x03, 0); delay_ms(5);
     lcd_nibble(0x03, 0); delay_ms(1);
     lcd_nibble(0x03, 0); lcd_nibble(0x02, 0);
     lcd_cmd(0x28); lcd_cmd(0x0C); lcd_cmd(0x01);
 
-    // Timer1 (PWM + Tick)
-    TCCR1A = (1<<5) | (1<<1); // COM1B1, WGM11
-    TCCR1B = (1<<4) | (1<<3) | (1<<1); // WGM13, WGM12, CS11
-    ICR1 = 39999; OCR1B = 3000;
-    TIMSK1 = (1<<1); OCR1A = 3999;
+    /* Configuração PWM Servo (Timer 1) */
+    TCCR1A = (1<<5) | (1<<1);           // Fast PWM, Clear OC1B on Compare
+    TCCR1B = (1<<4) | (1<<3) | (1<<1);  // Mode 14, Prescaler 8
+    ICR1 = 39999; OCR1B = 3000;         // 50Hz, Neutro
+    TIMSK1 = (1<<1); OCR1A = 3999;      // Interrupção a cada 2ms
 
-    EICRA = (1<<3); EIMSK = (1<<1); // INT1 Borda Descida
-    __asm__ volatile ("sei" ::); // Enable Global Interrupts
+    EICRA = (1<<3); EIMSK = (1<<1);     // INT1 ativado (D3)
+    __asm__ volatile ("sei" ::);        // Habilita interrupções globais
 
     uint8_t l_clk = (PINB & (1<<3));
     uint8_t l_sw  = (PIND & (1<<4));
@@ -408,7 +468,7 @@ int main(void) {
     atualiza_lcd();
 
     while(1) {
-        // Polling Encoder (D11/D12/D4)
+        /* Navegação Local (Encoder) */
         uint8_t clk = (PINB & (1<<3));
         if (clk != l_clk && clk == 0) {
             float s = (PINB & (1<<4)) ? 1.0 : -1.0;
@@ -423,32 +483,52 @@ int main(void) {
         if (!sw && l_sw) { param_sel = (param_sel + 1) % 3; atualiza_lcd(); delay_ms(200); }
         l_sw = sw;
 
+        /* Malha de Controle PID (100ms) */
         if (flag_pid) {
-            // Nível
+            // Leitura Nível (Ultrassônico)
             PORTD |= (1<<7); delay_us(10); PORTD &= ~(1<<7);
             uint32_t t = 0; while(!(PIND & (1<<6)) && t < 30000) t++;
             t = 0; while((PIND & (1<<6)) && t < 30000) { t++; delay_us(1); }
             float nivel = (t * 0.034) / 2;
 
-            // Bomba PNP
-            if (nivel > 15.0) PORTB &= ~(1<<5); else if (nivel < 5.0) PORTB |= (1<<5);
+            // Atuação Bomba (Lógica PNP)
+            if (nivel > 15.0) PORTB &= ~(1<<5); // LIGA se longe
+            else if (nivel < 5.0) PORTB |= (1<<5); // DESLIGA se perto
 
-            // PID Simples
+            // Cálculo PID de Vazão
             float vazao = (pulsos * 60.0) / 7.5; pulsos = 0;
-            erro_val = 30.0 - vazao;
+            erro_val = 30.0 - vazao; // Setpoint = 30, por ex
             
-            float u = (Kp * erro_val); // Exemplo Proporcional
+            integral += erro_val * 0.1;
+            float derivada = (erro_val - erro_ant) / 0.1;
+            
+            float p_t = Kp * erro_val;
+            float i_t = Ki * integral;
+            float d_t = Kd * derivada;
+            
+            float u = p_t + i_t + d_t;
+            erro_ant = erro_val;
+
+            // Acionamento Servo
             int16_t sv = 3000 + (int16_t)u;
             if (sv < 2000) sv = 2000; if (sv > 4000) sv = 4000;
             OCR1B = sv;
 
             atualiza_lcd();
 
-            // Telemetria Serial (Manual sem sprintf)
+            // Telemetria Serial p/ ESP32
             char tmp[10];
             ftoa_manual(vazao, tmp); for(int j=0; tmp[j]; j++){ while(!(UCSR0A & (1<<5))); UDR0 = tmp[j]; }
             while(!(UCSR0A & (1<<5))); UDR0 = ',';
             ftoa_manual(nivel, tmp); for(int j=0; tmp[j]; j++){ while(!(UCSR0A & (1<<5))); UDR0 = tmp[j]; }
+            while(!(UCSR0A & (1<<5))); UDR0 = ',';
+            ftoa_manual(erro_val, tmp); for(int j=0; tmp[j]; j++){ while(!(UCSR0A & (1<<5))); UDR0 = tmp[j]; }
+            while(!(UCSR0A & (1<<5))); UDR0 = ',';
+            ftoa_manual(p_t, tmp); for(int j=0; tmp[j]; j++){ while(!(UCSR0A & (1<<5))); UDR0 = tmp[j]; }
+            while(!(UCSR0A & (1<<5))); UDR0 = ',';
+            ftoa_manual(i_t, tmp); for(int j=0; tmp[j]; j++){ while(!(UCSR0A & (1<<5))); UDR0 = tmp[j]; }
+            while(!(UCSR0A & (1<<5))); UDR0 = ',';
+            ftoa_manual(d_t, tmp); for(int j=0; tmp[j]; j++){ while(!(UCSR0A & (1<<5))); UDR0 = tmp[j]; }
             while(!(UCSR0A & (1<<5))); UDR0 = '\n';
 
             flag_pid = 0;
