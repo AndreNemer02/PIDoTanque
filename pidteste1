@@ -1,0 +1,141 @@
+/**
+ * PROJETO: PID DE VAZAO COM SERVO (Baremetal)
+ * PLACA: ATmega328P (Arduino Uno)
+ */
+
+// --- DEFINIÇÃO DE REGISTRADORES ---
+#define REG8(x)  (*(volatile unsigned char *)(x))
+#define REG16(x) (*(volatile unsigned int *)(x))
+
+// GPIO e Interrupção
+#define _DDRD   REG8(0x2A)
+#define _PORTD  REG8(0x2B)
+#define _PIND   REG8(0x29)
+#define _DDRB   REG8(0x24)
+#define _EICRA  REG8(0x69)
+#define _EIMSK  REG8(0x3D)
+#define _SREG   REG8(0x5F)
+
+// Timer1 (Servo no Pino 9 - PB1)
+#define _TCCR1A REG8(0x80)
+#define _TCCR1B REG8(0x81)
+#define _ICR1   REG16(0x86)
+#define _OCR1A  REG16(0x88)
+
+// UART
+#define _UBRR0  REG16(0xC4)
+#define _UCSR0A REG8(0xC0)
+#define _UCSR0B REG8(0xC1)
+#define _UCSR0C REG8(0xC2)
+#define _UDR0   REG8(0xC6)
+
+// --- CONSTANTES E BITS ---
+#define us_to_ticks(s) ((s)*2) // 1 tick = 0.5us (Prescaler 8)
+#define SERVO_MIN 1000 // 1000 ticks = 500us
+#define SERVO_MAX 5000 // 5000 ticks = 2500us
+#define SERVO_MID 3000 // 1.5ms
+
+// --- VARIÁVEIS GLOBAIS ---
+volatile unsigned long pulseCount = 0;
+float vazao_atual = 0;
+float setpoint = 10.0; // Vazão desejada (ex: 10L/min)
+float erro_anterior = 0, integral = 0;
+
+// Variáveis que virão do ESP32/Blynk/Encoder
+extern volatile float Kp, Ki, Kd; 
+
+// --- VETOR DE INTERRUPÇÃO (SENSOR DE VAZÃO) ---
+extern "C" void __vector_1 (void) __attribute__ ((signal, used, externally_visible));
+void __vector_1 (void) {
+    pulseCount++;
+}
+
+// --- INICIALIZAÇÕES ---
+
+void init_systems() {
+    // 1. UART (9600 baud)
+    _UBRR0 = 103; 
+    _UCSR0B = (1 << 3) | (1 << 4); // TX e RX habilitados
+    _UCSR0C = (3 << 1); 
+
+    // 2. SENSOR (Pino 2 - INT0)
+    _DDRD &= ~(1 << 2);
+    _PORTD |= (1 << 2); // Pull-up
+    _EICRA = (1 << 1) | (1 << 0); // Rising Edge
+    _EIMSK = (1 << 0);
+
+    // 3. SERVO (Pino 9 - OC1A)
+    _DDRB |= (1 << 1); 
+    // Modo 14: Fast PWM, TOP em ICR1. Clear on Compare Match.
+    _TCCR1A = (1 << 7) | (1 << 1); 
+    _TCCR1B = (1 << 4) | (1 << 3) | (1 << 1); // Prescaler 8
+    _ICR1 = 40000; // Periodo de 20ms
+    _OCR1A = SERVO_MID;
+
+    _SREG |= (1 << 7); // Ativa interrupções globais
+}
+
+// --- FUNÇÕES AUXILIARES ---
+
+void delay_ms_manual(unsigned int ms) {
+    for (unsigned int i = 0; i < ms; i++) {
+        for (volatile unsigned int j = 0; j < 2000; j++); 
+    }
+}
+
+void uart_send_string(const char* s) {
+    while (*s) {
+        while (!(_UCSR0A & (1 << 5)));
+        _UDR0 = *s++;
+    }
+}
+
+// --- LOOP PRINCIPAL COM PID ---
+
+int main(void) {
+    init_systems();
+    uart_send_string("PID Vazao Iniciado...\r\n");
+
+    int posicao_servo = SERVO_MID;
+
+    while (1) {
+        // 1. ESPERA 1 SEGUNDO PARA COLETAR VAZÃO (O "wait a long time")
+        delay_ms_manual(1000);
+
+        // 2. LEITURA DA VAZÃO (Seção Crítica)
+        _SREG &= ~(1 << 7); // cli
+        unsigned long pulsos = pulseCount;
+        pulseCount = 0;
+        _SREG |= (1 << 7); // sei
+
+        // Converte pulsos para vazão (Exemplo: Freq/7.5 = L/min)
+        vazao_atual = (float)pulsos / 7.5; 
+
+        // 3. CÁLCULO DO PID
+        float erro = setpoint - vazao_atual;
+        integral += erro;
+        
+        // Anti-windup simples (limita a integral)
+        if (integral > 100) integral = 100;
+        if (integral < -100) integral = -100;
+
+        float derivativa = erro - erro_anterior;
+        float saida_pid = (Kp * erro) + (Ki * integral) + (Kd * derivativa);
+        erro_anterior = erro;
+
+        // 4. AJUSTE DO SERVO (Movimento rápido)
+        // Somamos a saída do PID à posição atual do servo
+        posicao_servo += (int)saida_pid;
+
+        // Limites de segurança do Servo
+        if (posicao_servo > SERVO_MAX) posicao_servo = SERVO_MAX;
+        if (posicao_servo < SERVO_MIN) posicao_servo = SERVO_MIN;
+
+        _OCR1A = posicao_servo;
+
+        // 5. ENVIO DE TELEMETRIA (Para o ESP32 -> Blynk)
+        // Formato CSV conforme combinado antes
+        // Aqui você usaria sua função ftoa_simple para formatar a string
+        uart_send_string("Ajustando Servo...\r\n");
+    }
+}
