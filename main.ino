@@ -1,7 +1,6 @@
 /**
- * PROJETO FINAL: Controle de Tanque Baremetal - André
+ * PROJETO FINAL: Controle de Tanque Baremetal 
  * FUSÃO: PID (Tiers) + Bomba/Ultrassom + LCD/Encoder + Telemetria ESP32
- * DATA: 11/12 | ATmega328P @ 16MHz
  */
 
 #define REG8(x)  (*(volatile unsigned char *)(x))
