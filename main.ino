@@ -9,9 +9,9 @@
  *
  * @pinout
  *   PD7 (D7)  TRIG do HC-SR04 (saída)
- *   PD6 (D6) → ECHO do HC-SR04 (entrada)
+ *   PD6 (D6)  ECHO do HC-SR04 (entrada)
  *   PD3 (D3)  Pulsos do YF-S201 via INT1 (entrada)
- *   PD4 (D4) → Botão SW do encoder KY-040 (entrada, pull-up)
+ *   PD4 (D4)  Botão SW do encoder KY-040 (entrada, pull-up)
  *   PB2 (D10)  PWM OC1B para o servomotor (saída)
  *   PB5 (D13  Bomba d'água via TIP30C PNP (saída)
  *   PB3 (D11)  CLK do encoder KY-040 (entrada)
