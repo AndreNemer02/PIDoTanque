@@ -1,0 +1,76 @@
+#define BLYNK_TEMPLATE_ID "TMPL2I0JRaVT5"
+#define BLYNK_TEMPLATE_NAME "TANQUE"
+#define BLYNK_AUTH_TOKEN "6yfjOG9DAbN7_s61uTdV0vbPXVttqeBF"
+
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+
+// Configurações do Wi-Fi
+char ssid[] = "NOME_DO_SEU_WIFI";
+char pass[] = "SENHA_DO_SEU_WIFI";
+
+// Variáveis para armazenar os dados recebidos do Arduino
+float vazao, nivel, erro, kpe, kii, kdd;
+
+void setup() {
+  Serial.begin(115200); // Debug USB
+  
+  // Comunicação com o Arduino (Baremetal)
+  // RX=16, TX=17
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);
+  
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+  Serial.println("ESP32 Pronto!");
+}
+
+void loop() {
+  Blynk.run();
+
+  // Se houver dados vindo do Arduino
+  if (Serial2.available()) {
+    String dados = Serial2.readStringUntil('\n');
+    dados.trim();
+
+    // Parser manual (quebra nas vírgulas)
+    int i0 = dados.indexOf(',');
+    int i1 = dados.indexOf(',', i0 + 1);
+    int i2 = dados.indexOf(',', i1 + 1);
+    int i3 = dados.indexOf(',', i2 + 1);
+    int i4 = dados.indexOf(',', i3 + 1);
+
+    if (i0 != -1 && i4 != -1) {
+      vazao = dados.substring(0, i0).toFloat();
+      nivel = dados.substring(i0 + 1, i1).toFloat();
+      erro  = dados.substring(i1 + 1, i2).toFloat();
+      kpe   = dados.substring(i2 + 1, i3).toFloat(); // Kp * Erro
+      kii   = dados.substring(i3 + 1, i4).toFloat(); // Ki * Int
+      kdd   = dados.substring(i4 + 1).toFloat();      // Kd * Der
+
+      // Envia para o Dashboard do Blynk
+      Blynk.virtualWrite(V0, vazao);
+      Blynk.virtualWrite(V1, nivel);
+      Blynk.virtualWrite(V5, erro);
+      Blynk.virtualWrite(V6, kpe);
+      Blynk.virtualWrite(V7, kii);
+      Blynk.virtualWrite(V8, kdd);
+    }
+  }
+}
+
+// Quando você mexe no slider do Blynk (Kp)
+BLYNK_WRITE(V2) {
+  float novo_kp = param.asFloat();
+  Serial2.print("P"); Serial2.println(novo_kp); // Envia "P1.5" por exemplo
+}
+
+// Quando você mexe no slider do Blynk (Ki)
+BLYNK_WRITE(V3) {
+  float novo_ki = param.asFloat();
+  Serial2.print("I"); Serial2.println(novo_ki);
+}
+
+// Quando você mexe no slider do Blynk (Kd)
+BLYNK_WRITE(V4) {
+  float novo_kd = param.asFloat();
+  Serial2.print("D"); Serial2.println(novo_kd);
+}
