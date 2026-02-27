@@ -1,0 +1,147 @@
+#include <stdint.h>
+
+// --- REGISTRADORES MANUAIS ---
+#define REG8(x)  (*(volatile uint8_t *)(x))
+#define REG16(x) (*(volatile uint16_t *)(x))
+
+#define _DDRD   REG8(0x2A)
+#define _PORTD  REG8(0x2B)
+#define _DDRB   REG8(0x24)
+#define _SREG   REG8(0x5F)
+#define _EICRA  REG8(0x69)
+#define _EIMSK  REG8(0x3D)
+#define _TCCR1A REG8(0x80)
+#define _TCCR1B REG8(0x81)
+#define _ICR1   REG16(0x86)
+#define _OCR1A  REG16(0x88)
+#define _UCSR0A REG8(0xC0)
+#define _UCSR0B REG8(0xC1)
+#define _UCSR0C REG8(0xC2)
+#define _UBRR0  REG16(0xC4)
+#define _UDR0   REG8(0xC6)
+
+// --- CONSTANTES SERVO ---
+#define us_to_ticks(s) ((s)*2)
+#define SERVO_STOP      us_to_ticks(1500)
+#define SERVO_MAX_DIR   us_to_ticks(2000)
+#define SERVO_MAX_ESQ   us_to_ticks(1000)
+
+// --- VARIÁVEIS PID ---
+volatile float Kp = 2.0, Ki = 0.5, Kd = 0.1; // Valores base para ajuste
+float setpoint = 15.0; 
+float erro_anterior = 0, integral = 0;
+volatile uint32_t pulseCount = 0;
+
+// --- FUNÇÕES DE COMUNICAÇÃO ---
+
+void uart_init() {
+    _UBRR0 = 103; // 9600 baud
+    _UCSR0B = (1 << 3); // TX enable
+    _UCSR0C = (3 << 1); // 8-bit
+}
+
+void uart_putc(char c) {
+    while (!(_UCSR0A & (1 << 5)));
+    _UDR0 = c;
+}
+
+void uart_puts(const char* s) {
+    while (*s) uart_putc(*s++);
+}
+
+// Função para enviar float via Serial (Baremetal não tem printf)
+void uart_send_float(float f) {
+    int inteiro = (int)f;
+    int decimal = (int)((f - inteiro) * 100);
+    if (decimal < 0) decimal *= -1;
+    
+    // Envia parte inteira
+    char buf[10];
+    int i = 0;
+    if (inteiro == 0) uart_putc('0');
+    if (inteiro < 0) { uart_putc('-'); inteiro *= -1; }
+    while (inteiro > 0) { buf[i++] = (inteiro % 10) + '0'; inteiro /= 10; }
+    while (i > 0) uart_putc(buf[--i]);
+    
+    uart_putc('.');
+    
+    // Envia parte decimal (2 casas)
+    if (decimal < 10) uart_putc('0');
+    i = 0;
+    if (decimal == 0) uart_putc('0');
+    while (decimal > 0) { buf[i++] = (decimal % 10) + '0'; decimal /= 10; }
+    while (i > 0) uart_putc(buf[--i]);
+}
+
+// --- CONTROLE DO SERVO ---
+
+void pulso_servo(int direcao) {
+    if (direcao > 0) _OCR1A = SERVO_MAX_DIR;
+    else _OCR1A = SERVO_MAX_ESQ;
+
+    // "Burst" de 20ms: o tempo de 1 quadro de sinal de servo
+    for (volatile uint32_t i = 0; i < 40000; i++); 
+
+    _OCR1A = SERVO_STOP;
+}
+
+// --- INTERRUPÇÃO SENSOR ---
+extern "C" void __vector_1 (void) __attribute__ ((signal, used, externally_visible));
+void __vector_1 (void) {
+    pulseCount++;
+}
+
+int main(void) {
+    // Setup
+    _DDRB |= (1 << 1); // Pino 9
+    _TCCR1A = (1 << 7) | (1 << 1);
+    _TCCR1B = (1 << 4) | (1 << 3) | (1 << 1);
+    _ICR1 = us_to_ticks(20000);
+    _OCR1A = SERVO_STOP;
+
+    _DDRD &= ~(1 << 2); // Pino 2 entrada
+    _EICRA = (1 << 1) | (1 << 0); // Rising edge
+    _EIMSK = (1 << 0);
+    
+    uart_init();
+    _SREG |= (1 << 7); // sei()
+
+    while (1) {
+        // 1. Espera 1 segundo (Amostragem)
+        for (volatile uint32_t i = 0; i < 2000000; i++); 
+
+        // 2. Cálculo da Vazão
+        _SREG &= ~(1 << 7); // cli()
+        float vazao = (float)pulseCount / 7.5;
+        pulseCount = 0;
+        _SREG |= (1 << 7); // sei()
+
+        // 3. CÁLCULO PID
+        float erro = setpoint - vazao;
+        integral += erro;
+        
+        // Anti-windup (Evita que a integral cresça infinitamente se a válvula travar)
+        if (integral > 50) integral = 50;
+        if (integral < -50) integral = -50;
+
+        float derivativa = erro - erro_anterior;
+        float PID_saida = (Kp * erro) + (Ki * integral) + (Kd * derivativa);
+        erro_anterior = erro;
+
+        // 4. ATUAÇÃO (Burst proporcional à intensidade do erro)
+        // Se o PID_saida for positivo e maior que um limite, move para um lado
+        if (PID_saida > 1.0) {
+            pulso_servo(1);
+        } 
+        // Se for negativo e menor que o limite, move para o outro
+        else if (PID_saida < -1.0) {
+            pulso_servo(-1);
+        }
+
+        // 5. TELEMETRIA (Para o ESP32 receber e mandar pro Blynk)
+        uart_puts("V:"); uart_send_float(vazao);
+        uart_puts(",E:"); uart_send_float(erro);
+        uart_puts(",P:"); uart_send_float(PID_saida);
+        uart_puts("\r\n");
+    }
+}
