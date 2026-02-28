@@ -2,9 +2,11 @@
  * PROJETO FINAL: Controle de Tanque Baremetal 
  * FUSÃO: PID (Tiers) + Bomba/Ultrassom + LCD/Encoder + Telemetria ESP32
  */
+typedef __UINT8_TYPE__ uint8_t;
+typedef __UINT16_TYPE__ uint16_t;
 
-#define REG8(x)  (*(volatile unsigned char *)(x))
-#define REG16(x) (*(volatile unsigned int *)(x))
+#define REG8(x)  (*(volatile uint8_t *)(x))
+#define REG16(x) (*(volatile uint16_t *)(x))
 
 // --- REGISTRADORES MANUAIS ---
 #define _PIND   REG8(0x29)
@@ -36,12 +38,47 @@
 #define _UCSR0C REG8(0xC2)
 #define _UBRR0L REG8(0xC4)
 
-// --- CONSTANTES SERVO ---
+// CONSTANTES SERVO
 #define SERVO_STOP 2600 // 1.5ms
 #define SERVO_DIR  2000 // 2.0ms
 #define SERVO_ESQ  3000 // 1.0ms
 
+// Definições de Pinos 
+#define SERVO_PIN     (1 << 1)  // PB1 (Pino 9 Digital)
+#define BOMBA_PIN     (1 << 5)  // PB5 (Pino 13 Digital)
+#define TRIG_PIN      (1 << 7)  // PD7 (Pino 7 Digital)
+#define ECHO_PIN      (1 << 6)  // PD6 (Pino 6 Digital)
+#define VAZAO_PIN     (1 << 2)  // PD2 (Pino 2 Digital)
+#define ENC_CLK       (1 << 3)  // PD3 (Pino 3 Digital)
+#define ENC_DT        (1 << 4)  // PD4 (Pino 4 Digital)
+#define ENC_SW        (1 << 5)  // PD5 (Pino 5 Digital)
+
+// Definições Timer
+
+#define COM1A1  (1 << 7)
+#define WGM11   (1 << 1)
+#define WGM12   (1 << 3)
+#define WGM13   (1 << 4)
+#define CS11    (1 << 1)
+
+#define ISC01   (1 << 1) 
+#define ISC00   (1 << 0)
+#define INT0    (1 << 0)
+#define SREG_I  (1 << 7)
+
+// LCD
+
+#define TWINT          (1 << 7)
+#define TWSTA          (1 << 5)
+#define TWSTO          (1 << 4)
+#define TWEN           (1 << 2)
+#define PCF8574_ADDR   (0x27 << 1)
+#define LCD_BACKLIGHT  0x08
+
+
+
 // --- VARIÁVEIS GLOBAIS ---
+
 volatile float Kp = 1.0, Ki = 0.1, Kd = 0.01;
 volatile float setpoint = 15.0, vazao_atual = 0, erro = 0, nivel = 0;
 float erro_anterior = 0, integral = 0;
@@ -51,18 +88,25 @@ unsigned char param_sel = 0;
 volatile unsigned long pulseCount = 0;
 unsigned char c_on = 0, c_off = 0;
 
+
 // --- FUNÇÕES DE APOIO E DELAY ---
+
 void delay_us(unsigned int us) {
-    while(us--) { __asm__ __volatile__ ("nop"); __asm__ __volatile__ ("nop"); }
+    while(us--) 
+        __asm__ __volatile__ ("nop"); __asm__ __volatile__ ("nop"); 
 }
 
 void delay_ms(unsigned int ms) {
-    while(ms--) { for(unsigned long i = 0; i < 1600; i++) __asm__ __volatile__ ("nop"); }
+    while(ms--) { 
+        for(unsigned long i = 0; i < 1600; i++) 
+            __asm__ __volatile__ ("nop"); 
+    }
 }
 
 // ISR do Sensor de Vazão (INT0 no Pino 2)
 extern "C" void __vector_1 (void) __attribute__ ((signal, used, externally_visible));
 void __vector_1 (void) { pulseCount++; }
+
 
 // --- UART (Comunicação ESP32) ---
 void uart_init() {
@@ -71,42 +115,79 @@ void uart_init() {
     _UCSR0C = (3 << 1); 
 }
 
-void uart_putc(char c) { while (!(_UCSR0A & (1 << 5))); _UDR0 = c; }
-void uart_puts(const char* s) { while (*s) uart_putc(*s++); }
+void uart_putc(char c) { 
+    while (!(_UCSR0A & (1 << 5))); _UDR0 = c; 
+}
+
+void uart_puts(const char* s) { 
+    while (*s) uart_putc(*s++); 
+}
 
 void uart_send_float(float f) {
-    if (f < 0) { uart_putc('-'); f = -f; }
-    int ip = (int)f;
-    int dp = (int)((f - ip) * 100);
-    char buf[10]; int i = 0;
-    if (ip == 0) uart_putc('0');
-    while (ip > 0) { buf[i++] = (ip % 10) + '0'; ip /= 10; }
+    if (f < 0) 
+        uart_putc('-'); f = -f; 
+
+    int pInt = (int)f;                    // Parte inteira
+    int pDec = (int)((f - pInt) * 100);     // Parte decimal
+
+    char buf[10]; 
+    int i = 0;
+
+    // Preenche o buffer com os digitos da parte inteira em ordem contrária.
+    if (pInt == 0) uart_putc('0');
+    while (pInt > 0) { 
+        buf[i] = (pInt % 10) + '0'; 
+        pInt /= 10; 
+        i++;
+    }
+    
     while (i > 0) uart_putc(buf[--i]);
     uart_putc('.');
-    if (dp < 10) uart_putc('0');
-    i = 0; if (dp == 0) uart_putc('0');
-    while (dp > 0) { buf[i++] = (dp % 10) + '0'; dp /= 10; }
+
+    // Preenche o buffer com os digitos da parte decimal em ordem contrária.
+    if (pDec < 10) uart_putc('0');
+    if (pDec == 0) uart_putc('0');
+    while (pDec > 0) { 
+        buf[i] = (pDec % 10) + '0'; 
+        pDec /= 10; 
+        i++;
+    }
+
     while (i > 0) uart_putc(buf[--i]);
 }
 
+
 // --- I2C E LCD BAREMETAL ---
-void i2c_init() { _TWSR = 0x00; _TWBR = 72; }
+
+void i2c_init() { 
+    _TWSR = 0x00; 
+    _TWBR = 72; 
+}
+
 
 void i2c_write(unsigned char data) {
-    _TWDR = data; _TWCR = (1 << 7) | (1 << 2);
-    while (!(_TWCR & (1 << 7)));
+    _TWDR = data; 
+    _TWCR = TWINT | TWEN;
+    while (!(_TWCR & TWINT));
 }
 
 void lcd_pcf(unsigned char data) {
-    _TWCR = (1 << 7) | (1 << 5) | (1 << 2); while(!(_TWCR & (1 << 7)));
-    _TWDR = (0x27 << 1); _TWCR = (1 << 7) | (1 << 2); while(!(_TWCR & (1 << 7)));
-    i2c_write(data | 0x08);
-    _TWCR = (1 << 7) | (1 << 4) | (1 << 2);
+    _TWCR = TWINT | TWSTA | TWEN; 
+    while(!(_TWCR & TWINT));
+
+    _TWDR = PCF8574_ADDR; 
+    _TWCR = TWINT | TWEN; 
+    while(!(_TWCR & TWINT));
+
+    i2c_write(data | LCD_BACKLIGHT);
+    _TWCR = TWINT | TWSTO | TWEN;
 }
 
 void lcd_pulse(unsigned char d) {
-    lcd_pcf(d | 0x04); delay_us(1);
-    lcd_pcf(d & ~0x04); delay_us(50);
+    lcd_pcf(d | 0x04);
+    delay_us(1);
+    lcd_pcf(d & ~0x04); 
+    delay_us(50);
 }
 
 void lcd_send(unsigned char val, unsigned char rs) {
@@ -122,23 +203,51 @@ void lcd_puts(const char* s) {
 }
 
 void itoa_simple(int n, char* s) {
-    int i = 0, sign = n; if (n < 0) n = -n;
-    do { s[i++] = n % 10 + '0'; } while ((n /= 10) > 0);
-    if (sign < 0) s[i++] = '-'; s[i] = '\0';
-    for (int j = 0, k = i - 1; j < k; j++, k--) { char t = s[j]; s[j] = s[k]; s[k] = t; }
+    int i = 0, sign = n; 
+    if (n < 0) n = -n;
+
+    do {
+         s[i++] = n % 10 + '0'; 
+    } while ((n /= 10) > 0);
+
+    if (sign < 0) s[i++] = '-'; 
+    s[i] = '\0';
+
+    for (int j = 0, k = i - 1; j < k; j++, k--) { 
+        char t = s[j]; 
+        s[j] = s[k]; 
+        s[k] = t; 
+    }
 }
 
 void print_float_lcd(float val) {
-    char b[10]; int ip = (int)val, dp = (int)((val - ip) * 100);
-    if (dp < 0) dp = -dp; itoa_simple(ip, b);
-    char *p = b; while(*p) lcd_send(*p++, 1);
-    lcd_send('.', 1); if (dp < 10) lcd_send('0', 1);
-    itoa_simple(dp, b); p = b; while(*p) lcd_send(*p++, 1);
+    char b[10]; 
+    int ip = (int)val, dp = (int)((val - ip) * 100);
+
+    if (dp < 0) 
+        dp = -dp; itoa_simple(ip, b);
+
+    char *p = b; 
+    while(*p)
+        lcd_send(*p++, 1);
+
+    lcd_send('.', 1); 
+    if (dp < 10) 
+        lcd_send('0', 1);
+
+    itoa_simple(dp, b);
+
+    p = b; 
+    while(*p) 
+        lcd_send(*p++, 1);
 }
 
 void atualiza_display() {
-    lcd_send(0x80, 0); lcd_puts("E:"); print_float_lcd(erro);
+    lcd_send(0x80, 0); 
+    lcd_puts("E:"); 
+    print_float_lcd(erro);
     lcd_send(0xC0, 0);
+
     if (param_sel == 0)      { lcd_puts("Kp:"); print_float_lcd(Kp); }
     else if (param_sel == 1) { lcd_puts("Ki:"); print_float_lcd(Ki); }
     else                     { lcd_puts("Kd:"); print_float_lcd(Kd); }
@@ -147,6 +256,7 @@ void atualiza_display() {
 // --- ATUAÇÃO E SENSORES ---
 void burst_servo(int dir, float erro_mag) {
     if (erro_mag < 0) erro_mag = -erro_mag;
+
     unsigned char mult = 1;
     if (erro_mag > 10.0) mult = 10;
     else if (erro_mag > 8.0) mult = 8;
@@ -160,78 +270,135 @@ void burst_servo(int dir, float erro_mag) {
     _OCR1A = SERVO_STOP;
 }
 
+
 unsigned int medir_nivel() {
-    _PORTD |= (1 << 7); delay_us(10); _PORTD &= ~(1 << 7);
-    while(!(_PIND & (1 << 6)));
+    _PORTD |= TRIG_PIN; 
+    delay_us(10); 
+    _PORTD &= ~TRIG_PIN;
+
+    while(!(_PIND & ECHO_PIN));
+
     unsigned int t = 0; 
-    while((_PIND & (1 << 6)) && (t < 15000)) { t++; delay_us(1); }
+    while((_PIND & ECHO_PIN) && (t < 15000)) 
+    { 
+        t++; delay_us(1); 
+    }
+
     return t;
 }
 
 // --- MAIN ---
 int main(void) {
-    _DDRB |= (1 << 1) | (1 << 5); _PORTB |= (1 << 5); // Pino 9 e 13 (Bomba PNP)
-    _DDRD |= (1 << 7); // Trigger
-    _DDRD &= ~((1 << 2)|(1 << 3)|(1 << 4)|(1 << 5)|(1 << 6));
-    _PORTD |= (1 << 2)|(1 << 3)|(1 << 4)|(1 << 5);
 
-    _TCCR1A = (1 << 7) | (1 << 1); _TCCR1B = (1 << 4) | (1 << 3) | (1 << 1); 
-    _ICR1 = 40000; _OCR1A = SERVO_STOP;
+    // Configura PB1 e PB5 como saída
+    _DDRB  |=  SERVO_PIN | BOMBA_PIN; 
+    _PORTB |=  BOMBA_PIN;   // Desliga a bomba  
+    
+    // Configura PD7 (Trigger do Ultrassom) como Saída
+    _DDRD  |=  TRIG_PIN;     
+    
+    // Configura PD2 a PD6 como Entradas (Vazão, Encoder e Echo)
+    _DDRD  &=  ~(VAZAO_PIN | ENC_CLK | ENC_DT | ENC_SW | ECHO_PIN);
 
-    uart_init(); i2c_init(); 
+    // Ativa Resistores de Pull-up internos para sensores e botões (PD2 a PD5)
+    _PORTD |=  VAZAO_PIN | ENC_CLK | ENC_DT | ENC_SW;
+
+    // Configurando o timer: PWM fast mode
+    _TCCR1A = COM1A1 | WGM11; 
+    _TCCR1B = WGM13 | WGM12 | CS11; 
+    _ICR1   = 40000;  // 20 ms
+    _OCR1A  = SERVO_STOP;
+
+    uart_init(); 
+    i2c_init(); 
+    
     // LCD Init Sequência
     delay_ms(50); lcd_pulse(0x30); delay_ms(5); lcd_pulse(0x30); delay_us(200);
     lcd_pulse(0x30); delay_us(200); lcd_pulse(0x20); lcd_send(0x28, 0); 
     lcd_send(0x0C, 0); lcd_send(0x01, 0); delay_ms(2);
 
-    _EICRA = (1 << 1) | (1 << 0); _EIMSK = (1 << 0);
-    _SREG |= (1 << 7);
+    _EICRA = ISC01 | ISC00; 
+    _EIMSK = INT0;
+    _SREG |= SREG_I;
 
     unsigned long timer_geral = 0;
-    unsigned char last_clk = (_PIND & (1 << 3));
-    unsigned char last_sw = (_PIND & (1 << 5));
+    unsigned char last_clk    = (_PIND & ENC_CLK);
+    unsigned char last_sw     = (_PIND & ENC_SW);
 
     atualiza_display();
 
     while(1) {
         timer_geral++;
 
-        // 1. ENCODER
-        unsigned char clk = (_PIND & (1 << 3));
+        // ENCODER
+        unsigned char clk = (_PIND & ENC_CLK);
         if (clk != last_clk && clk == 0) {
             delay_us(500);
-            if ((_PIND & (1 << 4)) != clk) {
-                if (param_sel == 0) Kp += 0.1; else if (param_sel == 1) Ki += 0.01; else Kd += 0.01;
+            if ((_PIND & ENC_DT) != clk) {
+                if (param_sel == 0) Kp += 0.1; 
+                else if (param_sel == 1) Ki += 0.01; 
+                else Kd += 0.01;
             } else {
-                if (param_sel == 0) Kp -= 0.1; else if (param_sel == 1) Ki -= 0.01; else Kd -= 0.01;
+                if (param_sel == 0) Kp -= 0.1; 
+                else if (param_sel == 1) Ki -= 0.01; 
+                else Kd -= 0.01;
             }
-            if (Kp < 0) Kp = 0; if (Ki < 0) Ki = 0; if (Kd < 0) Kd = 0;
+            if (Kp < 0) Kp = 0; 
+            if (Ki < 0) Ki = 0; 
+            if (Kd < 0) Kd = 0;
             atualiza_display();
         }
         last_clk = clk;
 
-        unsigned char sw = (_PIND & (1 << 5));
+        unsigned char sw = (_PIND & ENC_SW);
         if (!sw && last_sw) {
-            delay_ms(20); param_sel = (param_sel + 1) % 3; atualiza_display();
+            delay_ms(20); 
+            param_sel = (param_sel + 1) % 3; 
+            atualiza_display();
         }
         last_sw = sw;
 
-        // 2. TAREFAS PERIÓDICAS (A cada ~1 segundo)
+        // 2. TAREFAS PERIÓDICAS (A cada ~3 segundos)
         if (timer_geral > 500000) {
+
+            // Controle da bomba
             unsigned int d = medir_nivel();
             nivel = (float)d;
-            if (d > 240) { c_on++; c_off=0; if(c_on>=5){ _PORTB &= ~(1 << 5); c_on=0; } }
-            else if (d < 190) { c_off++; c_on=0; if(c_off>=5){ _PORTB |= (1 << 5); c_off=0; } }
+            if (d > 240) { 
+                c_on++; 
+                c_off=0; 
+                if(c_on>=5){ 
+                    _PORTB &= ~BOMBA_PIN; 
+                    c_on=0; 
+                } 
+            }
+            else if (d < 190) { 
+                c_off++;
+                c_on=0; 
+                if(c_off >= 5 ) { 
+                    _PORTB |= BOMBA_PIN;
+                     c_off=0; 
+                } 
+            }
 
-            _SREG &= ~(1 << 7); vazao_atual = (float)pulseCount; pulseCount = 0; _SREG |= (1 << 7);
+            // Controle do servo com base no sensor de vazão
+            _SREG &= ~SREG_I; 
+            vazao_atual = (float)pulseCount;
+            pulseCount = 0; 
+            _SREG |= SREG_I;
+
+            // Pid
             erro = setpoint - vazao_atual;
-            integral += erro; if(integral > 20) integral = 20;
+            integral += erro; 
+            if(integral > 20) integral = 20;
 
             kpe = Kp * erro; kii = Ki * integral; kdd = Kd * (erro - erro_anterior);
             float out = kpe + kii + kdd;
             erro_anterior = erro;
 
-            if (out > 1.0) burst_servo(1, erro); else if (out < -1.0) burst_servo(-1, erro);
+            if (out > 1.0) 
+                burst_servo(1, erro);
+            else if (out < -1.0) burst_servo(-1, erro);
 
             // Telemetria para o ESP32
             uart_send_float(vazao_atual); uart_putc(',');
